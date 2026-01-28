@@ -21,3 +21,7 @@ human-readable comments.
 ## Install
 ```bash
 pip install -r requirements.txt
+
+## Running and Testing
+python data_validation.py
+pytest -v
