@@ -7,52 +7,54 @@ RECHECK = "RECHECK"
 
 
 def load_data(path: str) -> pl.LazyFrame:
-    return (
-        pl.scan_csv(path)
-        .select(pl.all().name.to_lowercase())
-    )
+    return pl.scan_csv(path).select(pl.all().name.to_lowercase())
+
 
 def validate(df: pl.LazyFrame) -> pl.LazyFrame:
     sub_status = pl.col("sub_status").str.to_lowercase().fill_null("")
     title = pl.col("title").str.to_lowercase().fill_null("")
     req = pl.col("req").str.to_lowercase().fill_null("")
     email = pl.col("email").fill_null("")
-    company = pl.col("company").str.to_lowercase().fill_null("")
+    company = pl.col("company").fill_null("")
     link = pl.col("employees_proflink").str.to_lowercase().fill_null("")
     status = pl.col("status").str.to_lowercase().fill_null("")
 
-    # --- Title / PL ---
+    # --------------------------------------------------
+    # Title / PL
+    # Simple, robust substring requirement
+    # --------------------------------------------------
     title_invalid = (
         sub_status.str.contains("title/pl")
         & (
             title.eq("")
-            | ~title.str.contains(req)
+            | ~title.str.contains(req, literal=True)
         )
     )
 
-    # --- Other (auto) ---
+    # --------------------------------------------------
+    # Other (auto)
+    # --------------------------------------------------
     other_invalid = (
         sub_status.str.contains("other")
         & (company.eq("") | email.eq(""))
     )
 
-    # --- Proflink ---
+    # --------------------------------------------------
+    # Proflink
+    # --------------------------------------------------
     valid_link = (
         link.str.contains("linkedin.com/in/")
         | link.str.contains("zoominfo.com/p/")
-    ).fill_null(False)
+    )
 
-    # Fixed: Use regex extraction instead of split/get for streaming safety
-    # Extract domain from email using regex: everything after @ and before first dot
-    email_domain = email.str.extract(r"@([^.]+)", 1).fill_null("")
-    
-    # Clean company name
-    company_clean = company.str.replace_all(" ", "")
-    
-    # Check if email domain contains company name
-    email_domain_match = (
-        (email_domain.ne("") & company_clean.ne(""))
-        & email_domain.str.contains(company_clean, literal=True)
+    email_domain = (
+        email.str.extract(r"@([^\.]+)", 1).fill_null("")
+    )
+
+    company_normalized = company.str.replace_all(" ", "").str.to_lowercase()
+
+    email_domain_match = email_domain.str.contains(
+        company_normalized, literal=True
     )
 
     proflink_invalid = (
@@ -60,7 +62,9 @@ def validate(df: pl.LazyFrame) -> pl.LazyFrame:
         & ~(valid_link | email_domain_match)
     )
 
-    # --- N1 / NWC ---
+    # --------------------------------------------------
+    # N1 / NWC
+    # --------------------------------------------------
     n1_invalid = (
         sub_status.str.contains("n1")
         & (status.str.contains("r") | status.str.contains("f"))
@@ -71,6 +75,9 @@ def validate(df: pl.LazyFrame) -> pl.LazyFrame:
         & (status.str.contains(r"\?") | status.str.contains("no info"))
     )
 
+    # --------------------------------------------------
+    # Final result
+    # --------------------------------------------------
     return (
         df.with_columns(
             pl.when(title_invalid | other_invalid | proflink_invalid | n1_invalid)
@@ -101,12 +108,11 @@ def process_csv(input_path: str, output_path: str) -> None:
     start = time.perf_counter()
 
     df = validate(load_data(input_path)).collect(engine="streaming")
-
     df.write_csv(output_path)
 
     elapsed = time.perf_counter() - start
 
-    summary = df.group_by("Result").len().sort("Result")
+    summary = df.group_by("Result").count().sort("Result")
 
     print("\nProcessing completed")
     print(f"Rows processed: {df.height}")
